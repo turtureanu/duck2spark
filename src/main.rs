@@ -4,20 +4,16 @@ use std::{
     path::Path,
 };
 
-use clap::{crate_authors, crate_description, crate_name, crate_version, Arg, Command};
+use clap::{
+    builder::Str, crate_authors, crate_description, crate_name, crate_version, Arg, Command,
+};
 
 use phf::phf_map;
 use regex::Regex;
 
 static DUCKY_INSTRUCTIONS: phf::Map<&'static str, &'static str> = phf_map! {
-    "WINDOWS" => "0, MOD_GUI_LEFT",
-    "GUI" => "0, MOD_GUI_LEFT",
     "APP" => "101",
     "MENU" => "101",
-    "SHIFT" => "MOD_SHIFT_LEFT",
-    "ALT" => "MOD_ALT_LEFT",
-    "CONTROL" => "MOD_CONTROL_LEFT",
-    "CTRL" => "MOD_CONTROL_LEFT",
     "DOWNARROW" => "81",
     "DOWN" => "81",
     "LEFTARROW" => "80",
@@ -169,48 +165,87 @@ fn escape_string_chars(input: &str) -> String {
     escaped_string
 }
 
+fn get_keycode(input: &str) -> &str {
+    match DUCKY_INSTRUCTIONS.get_entry(input) {
+        Some(x) => x.1, // TODO: Rewrite this more nicely
+        None => "",
+    }
+}
+
 fn convert_instruction(line: &str) -> String {
-    // TODO: Support GUI, WINDOW, modifier keys (CTRL, SHIFT, ALT)
     // Somebody please rewrite this awfully overcomplicated if-else chain into something like a match statement
+
+    let line = line;
     if let Some(captures) = Regex::new(r#"^REM (.*)$"#)
         .unwrap()
         .captures(line)
         .filter(|captures| captures.get(1).is_some())
     {
-        let comment = captures.get(1).unwrap();
-        return format!("\t// {}", comment.as_str());
+        return format!("\t// {}", captures.get(1).unwrap().as_str());
     } else if let Some(captures) = Regex::new(r#"^STRING (.*)$"#)
         .unwrap()
         .captures(line)
         .filter(|captures| captures.get(1).is_some())
     {
-        let string = captures.get(1).unwrap();
         return format!(
             "\tDigiKeyboard.print(\"{}\");",
-            escape_string_chars(string.as_str())
+            escape_string_chars(captures.get(1).unwrap().as_str())
         );
     } else if let Some(captures) = Regex::new(r#"^DELAY (\d+)$"#)
         .unwrap()
         .captures(line)
         .filter(|captures| captures.get(1).is_some())
     {
-        let delay = captures.get(1).unwrap();
-        return format!("\tDigiKeyboard.delay({});", delay.as_str());
-    } else if let Some(captures) = Regex::new(r#"^GUI ([a-z])$"#)
+        return format!(
+            "\tDigiKeyboard.delay({});",
+            captures.get(1).unwrap().as_str()
+        );
+    } else if let Some(captures) = Regex::new(r#"^GUI ([a-z])$|^WINDOWS ([a-z])$"#)
         .unwrap()
         .captures(line)
         .filter(|captures| captures.get(1).is_some())
     {
-        let char = captures.get(1).unwrap();
-        return format!("\tDigiKeyboard.delay({});", char.as_str());
+        return format!(
+            "\tDigiKeyboard.sendKeyStroke(0, MOD_GUI_LEFT, {});",
+            captures.get(1).unwrap().as_str()
+        );
+    } else if Regex::new(r#"^(CONTROL) .*|^(CTRL) .*|^(SHIFT) .*|^(ALT) .*"#)
+        .unwrap()
+        .is_match(line)
+    {
+        let mut modifiers: Vec<&str> = vec![];
+        let mut our_line = String::from(line);
+
+        if our_line.contains("CONTROL") || our_line.contains("CTRL") {
+            modifiers.push("MOD_CONTROL_LEFT");
+            our_line = our_line.replace("CONTROL ", "");
+            our_line = our_line.replace("CTRL ", "");
+        } else if our_line.contains("SHIFT") {
+            modifiers.push("MOD_SHIFT_LEFT");
+            our_line = our_line.replace("SHIFT ", "");
+        } else if our_line.contains("ALT") {
+            modifiers.push("MOD_ALT_LEFT");
+            our_line = our_line.replace("ALT ", "");
+        }
+
+        if !modifiers.is_empty() {
+            modifiers.insert(0, "0");
+        }
+
+        our_line = our_line.as_str().trim().to_string();
+        our_line = get_keycode(our_line.as_str()).to_string();
+
+        let keystrokes = format!("{}, {}", modifiers.join(", "), our_line);
+        return format!("\tDigiKeyboard.sendKeyStroke({});", keystrokes);
     } else {
+        // TODO: Use get_keycode to simplify this code:
         match DUCKY_INSTRUCTIONS.get(line).cloned() {
-            Some(x) => return format!("\tDigiKeyboard.sendKeyStroke({});", x.to_string()),
+            Some(x) => format!("\tDigiKeyboard.sendKeyStroke({});", x.to_string()),
             None => {
                 if line.is_empty() {
-                    return "".to_string();
+                    "".to_string()
                 } else {
-                    return format!("\t// !!! | {}", line);
+                    format!("\t// Unimplemented: {}", line)
                 }
             }
         }
