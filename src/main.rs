@@ -1,16 +1,15 @@
 use std::{
     fs::File,
-    io::{self, BufRead},
+    io::{self, BufRead, Write},
     path::Path,
 };
 
-use clap::{
-    builder::Str, crate_authors, crate_description, crate_name, crate_version, Arg, Command,
-};
+use clap::{crate_authors, crate_description, crate_name, crate_version, Arg, Command};
 
 use phf::phf_map;
 use regex::Regex;
 
+// Got these codes from digiQuack: https://github.com/CedArctic/digiQuack/blob/master/javascript/digiQuack.js
 static DUCKY_INSTRUCTIONS: phf::Map<&'static str, &'static str> = phf_map! {
     "APP" => "101",
     "MENU" => "101",
@@ -181,14 +180,14 @@ fn convert_instruction(line: &str) -> String {
         .captures(line)
         .filter(|captures| captures.get(1).is_some())
     {
-        return format!("\t// {}", captures.get(1).unwrap().as_str());
+        return format!("\t// {}\n", captures.get(1).unwrap().as_str());
     } else if let Some(captures) = Regex::new(r#"^STRING (.*)$"#)
         .unwrap()
         .captures(line)
         .filter(|captures| captures.get(1).is_some())
     {
         return format!(
-            "\tDigiKeyboard.print(\"{}\");",
+            "\tDigiKeyboard.print(\"{}\");\n",
             escape_string_chars(captures.get(1).unwrap().as_str())
         );
     } else if let Some(captures) = Regex::new(r#"^DELAY (\d+)$"#)
@@ -197,7 +196,7 @@ fn convert_instruction(line: &str) -> String {
         .filter(|captures| captures.get(1).is_some())
     {
         return format!(
-            "\tDigiKeyboard.delay({});",
+            "\tDigiKeyboard.delay({});\n",
             captures.get(1).unwrap().as_str()
         );
     } else if let Some(captures) = Regex::new(r#"^GUI ([a-z])$|^WINDOWS ([a-z])$"#)
@@ -206,7 +205,7 @@ fn convert_instruction(line: &str) -> String {
         .filter(|captures| captures.get(1).is_some())
     {
         return format!(
-            "\tDigiKeyboard.sendKeyStroke(0, MOD_GUI_LEFT, {});",
+            "\tDigiKeyboard.sendKeyStroke(0, MOD_GUI_LEFT, {});\n",
             captures.get(1).unwrap().as_str()
         );
     } else if Regex::new(r#"^(CONTROL) .*|^(CTRL) .*|^(SHIFT) .*|^(ALT) .*"#)
@@ -236,16 +235,16 @@ fn convert_instruction(line: &str) -> String {
         our_line = get_keycode(our_line.as_str()).to_string();
 
         let keystrokes = format!("{}, {}", modifiers.join(", "), our_line);
-        return format!("\tDigiKeyboard.sendKeyStroke({});", keystrokes);
+        return format!("\tDigiKeyboard.sendKeyStroke({});\n", keystrokes);
     } else {
         // TODO: Use get_keycode to simplify this code:
         match DUCKY_INSTRUCTIONS.get(line).cloned() {
-            Some(x) => format!("\tDigiKeyboard.sendKeyStroke({});", x.to_string()),
+            Some(x) => format!("\tDigiKeyboard.sendKeyStroke({});\n", x.to_string()),
             None => {
                 if line.is_empty() {
                     "".to_string()
                 } else {
-                    format!("\t// Unimplemented: {}", line)
+                    format!("\t// Unimplemented: {}\n", line)
                 }
             }
         }
@@ -253,8 +252,7 @@ fn convert_instruction(line: &str) -> String {
 }
 
 const C_HEADER: &str = "#include \"DigiKeyboard.h\"\n\nvoid setup() {}\n\nvoid loop() {\n";
-
-const C_FOOTER: &str = "\n}";
+const C_FOOTER: &str = "}\n";
 
 // The output is wrapped in a Result to allow matching on errors.
 // Returns an Iterator to the Reader of the lines of the file.
@@ -280,20 +278,45 @@ fn main() {
         .arg(Arg::new("output file").short('o').long("output file"))
         .get_matches();
 
+    let input_file = m.get_one::<String>("input file").unwrap();
     if m.contains_id("output file") {
         // Write to file
-        !todo!();
-    } else {
-        println!("{}", C_HEADER);
-        // Write to STDOUT
-        if let Ok(lines) = read_lines(m.get_one::<String>("input file").unwrap()) {
+        let output_path = Path::new(m.get_one::<String>("output file").unwrap());
+
+        let mut output_file = match File::create(&output_path) {
+            Err(e) => panic!("Couldn't create file {}: {}", output_path.display(), e),
+            Ok(file) => file,
+        };
+
+        let mut code = String::new();
+        code.push_str(C_HEADER);
+
+        if let Ok(lines) = read_lines(input_file) {
             // Consumes the iterator, returns an (Optional) String
             for line in lines.flatten() {
-                println!("{}", convert_instruction(&line));
+                code.push_str(&convert_instruction(&line));
             }
         } else {
             println!("Invalid input file provided!");
         }
-        println!("{}", C_FOOTER);
+
+        code.push_str(C_FOOTER);
+
+        match output_file.write_all(code.as_bytes()) {
+            Err(e) => panic!("Couldn't write to {}: {}", output_path.display(), e),
+            Ok(_) => println!("Done!"),
+        }
+    } else {
+        print!("{}", C_HEADER);
+        // Write to STDOUT
+        if let Ok(lines) = read_lines(input_file) {
+            // Consumes the iterator, returns an (Optional) String
+            for line in lines.flatten() {
+                print!("{}", convert_instruction(&line));
+            }
+        } else {
+            println!("Invalid input file provided!");
+        }
+        print!("{}", C_FOOTER);
     }
 }
